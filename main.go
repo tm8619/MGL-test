@@ -263,19 +263,31 @@ func demonstrateConcurrentLocking(db *sql.DB) error {
 			done <- err
 			return
 		}
-		defer tx2.Rollback()
+		defer tx2.Rollback() // エラー時も確実にクリーンアップ
 
 		fmt.Println("  TX2: id=1 の行へのアクセスを試行...")
 		// この操作はTX1がコミット/ロールバックするまでブロックされる
 		var value2 int
 		err = tx2.QueryRow("SELECT value FROM test_table WHERE id = 1 FOR UPDATE").Scan(&value2)
-		done <- err
+		if err != nil {
+			done <- err
+			return
+		}
+		
+		// 成功時はコミット
+		if err := tx2.Commit(); err != nil {
+			done <- err
+			return
+		}
+		done <- nil
 	}()
 
 	// TX1を少し待ってからコミット
 	time.Sleep(2 * time.Second)
 	fmt.Println("  TX1: コミット (ロック解放)")
-	tx1.Commit()
+	if err := tx1.Commit(); err != nil {
+		return fmt.Errorf("TX1 コミットエラー: %w", err)
+	}
 
 	// TX2の完了を待つ
 	if err := <-done; err != nil {
