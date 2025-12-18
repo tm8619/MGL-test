@@ -1,5 +1,5 @@
 module github.com/tm8619/MGL-test
 
-go 1.21
+go 1.25
 
 require github.com/go-sql-driver/mysql v1.7.1
