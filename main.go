@@ -64,7 +64,12 @@ func main() {
 		log.Printf("警告: テーブルと行ロックテスト: %v", err)
 	}
 
-	// シナリオ3: ロック情報の表示
+	// シナリオ3: 並行トランザクションのロック競合
+	if err := demonstrateConcurrentLocking(db); err != nil {
+		log.Printf("警告: 並行ロックテスト: %v", err)
+	}
+
+	// シナリオ4: ロック情報の表示
 	if err := displayLockInfo(db); err != nil {
 		log.Printf("警告: ロック情報表示: %v", err)
 	}
@@ -144,7 +149,7 @@ func testRowLevelLocking(db *sql.DB) error {
 
 // シナリオ2: テーブルロックと行ロックの互換性
 func testTableAndRowLocks(db *sql.DB) error {
-	fmt.Println("シナリオ2: テーブルロックと行ロックの共存")
+	fmt.Println("シナリオ2: 複数行への共有ロック")
 
 	tx, err := db.Begin()
 	if err != nil {
@@ -152,15 +157,26 @@ func testTableAndRowLocks(db *sql.DB) error {
 	}
 	defer tx.Rollback()
 
-	// SELECT ... LOCK IN SHARE MODE で共有ロック (S) を取得
-	var count int
-	err = tx.QueryRow("SELECT COUNT(*) FROM test_table LOCK IN SHARE MODE").Scan(&count)
+	// SELECT ... LOCK IN SHARE MODE で各行に共有ロック (S) を取得
+	rows, err := tx.Query("SELECT id, name FROM test_table WHERE id <= 3 LOCK IN SHARE MODE")
 	if err != nil {
 		return fmt.Errorf("共有ロック取得エラー: %w", err)
 	}
+	defer rows.Close()
 
-	fmt.Printf("  共有ロック取得: %d行\n", count)
-	fmt.Println("  → 行レベルで共有ロック (S) を取得")
+	count := 0
+	fmt.Println("  共有ロック取得:")
+	for rows.Next() {
+		var id int
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return err
+		}
+		fmt.Printf("    id=%d, name=%s\n", id, name)
+		count++
+	}
+
+	fmt.Printf("  → %d行に共有ロック (S) を取得\n", count)
 	fmt.Println("  → テーブルレベルでは意図共有ロック (IS) が自動設定")
 	fmt.Println("  → 他のトランザクションは読み取り可能、書き込みはブロック")
 
@@ -173,9 +189,9 @@ func testTableAndRowLocks(db *sql.DB) error {
 	return nil
 }
 
-// シナリオ3: ロック情報の表示
+// シナリオ4: ロック情報の表示
 func displayLockInfo(db *sql.DB) error {
-	fmt.Println("シナリオ3: 現在のロック情報")
+	fmt.Println("シナリオ4: 現在のロック情報")
 
 	// performance_schemaからロック情報を取得
 	// MySQLのロック階層を確認
@@ -220,9 +236,10 @@ func displayLockInfo(db *sql.DB) error {
 	return nil
 }
 
-// デモンストレーション用: 並行トランザクションのシミュレーション
+// シナリオ3: 並行トランザクションのシミュレーション
 func demonstrateConcurrentLocking(db *sql.DB) error {
-	fmt.Println("デモ: 並行トランザクションでのロック競合")
+	fmt.Println("シナリオ3: 並行トランザクションでのロック競合")
+	fmt.Println()
 
 	// トランザクション1: 行をロック
 	tx1, err := db.Begin()
