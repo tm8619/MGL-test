@@ -43,7 +43,7 @@ go run main.go
 
 ## 階層ロック(User/Account/Resource)の単体テスト
 
-このリポジトリには、MySQL の行ロック（`FOR SHARE` / `FOR UPDATE NOWAIT`）を使った
+このリポジトリには、MySQL の行ロック（`FOR SHARE` / `FOR UPDATE`）を使った
 `User -> Account -> Resource` の階層ロック検証用テストが入っています（パッケージ: `hierlock`）。
 
 ### 事前準備
@@ -64,6 +64,10 @@ go test -v ./...
 ```
 
 MySQL に接続できない環境では、`hierlock` のテストは `SKIP` になります（他のテストは動きます）。
+
+シナリオごとの期待挙動は以下にまとめています:
+
+- docs/hierlock-scenarios.md
 
 ## 検証シナリオ
 

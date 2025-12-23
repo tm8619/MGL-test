@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 )
 
 type Level int
@@ -73,6 +74,60 @@ func (m *Manager) Acquire(ctx context.Context, level Level, userID, accountID, r
 	return &LockHandle{tx: tx}, nil
 }
 
+// AcquireResources locks a fixed hierarchy (User -> Account -> Resources...).
+//
+// Rule:
+// - User, Account: shared lock
+// - Each Resource: exclusive lock
+//
+// Resources are locked in lexicographical order to avoid deadlocks when multiple
+// transactions lock multiple resources.
+func (m *Manager) AcquireResources(ctx context.Context, userID, accountID string, resourceIDs []string) (*LockHandle, error) {
+	if m == nil || m.db == nil {
+		return nil, fmt.Errorf("manager db is nil")
+	}
+	if userID == "" || accountID == "" {
+		return nil, fmt.Errorf("userID and accountID are required")
+	}
+	if len(resourceIDs) == 0 {
+		return nil, fmt.Errorf("resourceIDs is required")
+	}
+	for _, r := range resourceIDs {
+		if r == "" {
+			return nil, fmt.Errorf("resourceID is required")
+		}
+	}
+
+	tx, err := m.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return nil, err
+	}
+
+	rollback := func(cause error) (*LockHandle, error) {
+		_ = tx.Rollback()
+		return nil, cause
+	}
+
+	// Shared locks on ancestors.
+	if err := lockRow(ctx, tx, userKey(userID), false); err != nil {
+		return rollback(err)
+	}
+	if err := lockRow(ctx, tx, accountKey(userID, accountID), false); err != nil {
+		return rollback(err)
+	}
+
+	// Exclusive locks on resources in deterministic order.
+	ordered := append([]string{}, resourceIDs...)
+	sort.Strings(ordered)
+	for _, r := range ordered {
+		if err := lockRow(ctx, tx, resourceKey(userID, accountID, r), true); err != nil {
+			return rollback(err)
+		}
+	}
+
+	return &LockHandle{tx: tx}, nil
+}
+
 func lockKeys(level Level, userID, accountID, resourceID string) ([]string, error) {
 	switch level {
 	case LevelUser:
@@ -109,14 +164,14 @@ func resourceKey(userID, accountID, resourceID string) string {
 
 func lockRow(ctx context.Context, tx *sql.Tx, lockKey string, exclusive bool) error {
 	// NOTE:
-	// - MySQL 8.0 supports NOWAIT for FOR UPDATE / FOR SHARE.
-	// - We rely on NOWAIT to make tests deterministic (no sleeping).
+	// - We intentionally DO NOT use NOWAIT here: callers/tests can observe real
+	//   blocking behavior.
 	// - The row must exist (we pre-create rows in tests).
 	var query string
 	if exclusive {
-		query = "SELECT lock_key FROM hier_locks WHERE lock_key = ? FOR UPDATE NOWAIT"
+		query = "SELECT lock_key FROM hier_locks WHERE lock_key = ? FOR UPDATE"
 	} else {
-		query = "SELECT lock_key FROM hier_locks WHERE lock_key = ? FOR SHARE NOWAIT"
+		query = "SELECT lock_key FROM hier_locks WHERE lock_key = ? FOR SHARE"
 	}
 
 	var got string

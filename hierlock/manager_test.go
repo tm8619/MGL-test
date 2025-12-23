@@ -28,13 +28,33 @@ func TestHierarchy_ResourceBlocksAccountExclusive(t *testing.T) {
 	}
 	defer lock1.Release()
 
-	// Should conflict because account row is held FOR SHARE by resource lock.
-	_, err = m.Acquire(ctx, LevelAccount, "user1", "accountA", "")
-	if err == nil {
-		t.Fatalf("expected conflict, got nil")
+	// Should block because account row is held FOR SHARE by resource lock.
+	start := time.Now()
+	acquired := make(chan error, 1)
+	go func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		lock2, err := m.Acquire(cctx, LevelAccount, "user1", "accountA", "")
+		if lock2 != nil {
+			defer lock2.Release()
+		}
+		acquired <- err
+	}()
+
+	select {
+	case err := <-acquired:
+		t.Fatalf("expected to block, but returned early: %v", err)
+	case <-time.After(150 * time.Millisecond):
+		// ok, still blocked
 	}
-	if !isLockConflict(err) {
-		t.Fatalf("expected lock conflict mysql error, got: %v", err)
+
+	_ = lock1.Release()
+	err = <-acquired
+	if err != nil {
+		t.Fatalf("expected acquire after release, got: %v", err)
+	}
+	if time.Since(start) < 150*time.Millisecond {
+		t.Fatalf("expected waiting, got duration=%v", time.Since(start))
 	}
 }
 
@@ -57,13 +77,33 @@ func TestHierarchy_ResourceBlocksUserExclusive(t *testing.T) {
 	}
 	defer lock1.Release()
 
-	// Should conflict because user row is held FOR SHARE by resource lock.
-	_, err = m.Acquire(ctx, LevelUser, "user1", "", "")
-	if err == nil {
-		t.Fatalf("expected conflict, got nil")
+	// Should block because user row is held FOR SHARE by resource lock.
+	start := time.Now()
+	acquired := make(chan error, 1)
+	go func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		lock2, err := m.Acquire(cctx, LevelUser, "user1", "", "")
+		if lock2 != nil {
+			defer lock2.Release()
+		}
+		acquired <- err
+	}()
+
+	select {
+	case err := <-acquired:
+		t.Fatalf("expected to block, but returned early: %v", err)
+	case <-time.After(150 * time.Millisecond):
+		// ok
 	}
-	if !isLockConflict(err) {
-		t.Fatalf("expected lock conflict mysql error, got: %v", err)
+
+	_ = lock1.Release()
+	err = <-acquired
+	if err != nil {
+		t.Fatalf("expected acquire after release, got: %v", err)
+	}
+	if time.Since(start) < 150*time.Millisecond {
+		t.Fatalf("expected waiting, got duration=%v", time.Since(start))
 	}
 }
 

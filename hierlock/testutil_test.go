@@ -3,6 +3,7 @@ package hierlock
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -78,14 +79,29 @@ func isLockConflict(err error) bool {
 	if ok := asMySQLError(err, &me); !ok {
 		return false
 	}
-	// MySQL 8 NOWAIT returns ER_LOCK_NOWAIT (3572).
 	// Some environments may surface timeout/deadlock depending on server settings.
 	switch me.Number {
-	case 3572, 1205, 1213:
+	case 1205, 1213:
 		return true
 	default:
 		return false
 	}
+}
+
+func isDeadlock(err error) bool {
+	var me *mysql.MySQLError
+	if !errors.As(err, &me) {
+		return false
+	}
+	return me.Number == 1213
+}
+
+func isLockWaitTimeout(err error) bool {
+	var me *mysql.MySQLError
+	if !errors.As(err, &me) {
+		return false
+	}
+	return me.Number == 1205
 }
 
 func asMySQLError(err error, target **mysql.MySQLError) bool {
