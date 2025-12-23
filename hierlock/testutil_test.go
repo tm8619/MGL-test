@@ -47,29 +47,41 @@ type fataler interface {
 
 func setupLockTable(ctx context.Context, t fataler, db *sql.DB) {
 	stmt := `
-CREATE TABLE IF NOT EXISTS hier_locks (
-  lock_key VARCHAR(255) NOT NULL,
-  PRIMARY KEY (lock_key)
+CREATE TABLE IF NOT EXISTS hier_lock_buckets (
+  level TINYINT NOT NULL,
+  bucket INT NOT NULL,
+  PRIMARY KEY (level, bucket)
 ) ENGINE=InnoDB;
 `
 	if _, err := db.ExecContext(ctx, stmt); err != nil {
-		t.Fatalf("create table hier_locks: %v", err)
+		t.Fatalf("create table hier_lock_buckets: %v", err)
 	}
 
 	// Keep the table small and deterministic per test run.
-	if _, err := db.ExecContext(ctx, "TRUNCATE TABLE hier_locks"); err != nil {
-		t.Fatalf("truncate hier_locks: %v", err)
+	if _, err := db.ExecContext(ctx, "TRUNCATE TABLE hier_lock_buckets"); err != nil {
+		t.Fatalf("truncate hier_lock_buckets: %v", err)
 	}
 }
 
+// seedLockKeys is kept only for backward compatibility with earlier iterations.
+// The current implementation uses bucket rows in hier_lock_buckets instead.
 func seedLockKeys(ctx context.Context, t fataler, db *sql.DB, keys ...string) {
-	for _, k := range keys {
-		if k == "" {
-			t.Fatalf("empty lock key")
+	_ = ctx
+	_ = t
+	_ = db
+	_ = keys
+}
+
+func seedBuckets(ctx context.Context, t fataler, db *sql.DB, targets ...lockTarget) {
+	for _, tgt := range targets {
+		if tgt.bucket < 0 || tgt.bucket >= lockBucketSpace {
+			t.Fatalf("bucket out of range: %v", tgt.bucket)
 		}
-		// INSERT IGNORE is safe for idempotent seeding.
-		if _, err := db.ExecContext(ctx, "INSERT IGNORE INTO hier_locks(lock_key) VALUES (?)", k); err != nil {
-			t.Fatalf("insert lock key %q: %v", k, err)
+		if _, err := db.ExecContext(ctx,
+			"INSERT IGNORE INTO hier_lock_buckets(level, bucket) VALUES (?, ?)",
+			int(tgt.level), tgt.bucket,
+		); err != nil {
+			t.Fatalf("insert bucket row level=%d bucket=%d: %v", tgt.level, tgt.bucket, err)
 		}
 	}
 }
@@ -127,5 +139,63 @@ func mustKeys(level Level, userID, accountID, resourceID string) []string {
 	if err != nil {
 		panic(fmt.Sprintf("lockKeys: %v", err))
 	}
-	return keys
+	// keep legacy helper for older tests that still build string keys
+	// (not used by bucket-based tests)
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, fmt.Sprintf("%d:%d", k.level, k.bucket))
+	}
+	return out
+}
+
+func mustTargets(level Level, userID, accountID, resourceID string) []lockTarget {
+	tgts, err := lockKeys(level, userID, accountID, resourceID)
+	if err != nil {
+		panic(fmt.Sprintf("lockKeys: %v", err))
+	}
+	return tgts
+}
+
+func pickDifferentUserIDNonColliding(baseUserID, accountID, resourceID string) string {
+	baseU := userTarget(baseUserID)
+	baseA := accountTarget(baseUserID, accountID)
+	baseR := resourceTarget(baseUserID, accountID, resourceID)
+	for i := 2; ; i++ {
+		cand := fmt.Sprintf("%s_%d", baseUserID, i)
+		if userTarget(cand) == baseU {
+			continue
+		}
+		if accountTarget(cand, accountID) == baseA {
+			continue
+		}
+		if resourceTarget(cand, accountID, resourceID) == baseR {
+			continue
+		}
+		return cand
+	}
+}
+
+func pickDifferentAccountIDNonCollidingResource(userID, baseAccountID, resourceID string) string {
+	baseA := accountTarget(userID, baseAccountID)
+	baseR := resourceTarget(userID, baseAccountID, resourceID)
+	for i := 2; ; i++ {
+		cand := fmt.Sprintf("%s_%d", baseAccountID, i)
+		if accountTarget(userID, cand) == baseA {
+			continue
+		}
+		if resourceTarget(userID, cand, resourceID) == baseR {
+			continue
+		}
+		return cand
+	}
+}
+
+func pickDifferentResourceID(userID, accountID, baseResourceID string) string {
+	baseR := resourceTarget(userID, accountID, baseResourceID)
+	for i := 2; ; i++ {
+		cand := fmt.Sprintf("%s_%d", baseResourceID, i)
+		if resourceTarget(userID, accountID, cand) != baseR {
+			return cand
+		}
+	}
 }

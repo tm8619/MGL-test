@@ -17,11 +17,12 @@ func TestHierarchy_Deadlock_UnorderedMultiResource(t *testing.T) {
 	defer cancel()
 
 	setupLockTable(ctx, t, db)
-	seedLockKeys(ctx, t, db,
-		userKey("u1"),
-		accountKey("u1", "a1"),
-		resourceKey("u1", "a1", "r1"),
-		resourceKey("u1", "a1", "r2"),
+	r2 := pickDifferentResourceID("u1", "a1", "r1")
+	seedBuckets(ctx, t, db,
+		userTarget("u1"),
+		accountTarget("u1", "a1"),
+		resourceTarget("u1", "a1", "r1"),
+		resourceTarget("u1", "a1", r2),
 	)
 
 	ready1 := make(chan struct{})
@@ -31,11 +32,11 @@ func TestHierarchy_Deadlock_UnorderedMultiResource(t *testing.T) {
 	resCh := make(chan error, 2)
 
 	go func() {
-		err := acquireTwoResourcesUnorderedWithBarrier(ctx, db, "u1", "a1", "r1", "r2", ready1, startSecond)
+		err := acquireTwoResourcesUnorderedWithBarrier(ctx, db, "u1", "a1", "r1", r2, ready1, startSecond)
 		resCh <- err
 	}()
 	go func() {
-		err := acquireTwoResourcesUnorderedWithBarrier(ctx, db, "u1", "a1", "r2", "r1", ready2, startSecond)
+		err := acquireTwoResourcesUnorderedWithBarrier(ctx, db, "u1", "a1", r2, "r1", ready2, startSecond)
 		resCh <- err
 	}()
 
@@ -86,14 +87,14 @@ func acquireTwoResourcesUnorderedWithBarrier(
 	// doesn't detect deadlock quickly for some reason.
 	_, _ = tx.ExecContext(ctx, "SET SESSION innodb_lock_wait_timeout = 3")
 
-	if err := lockRow(ctx, tx, userKey(userID), false); err != nil {
+	if err := lockRow(ctx, tx, userTarget(userID), false); err != nil {
 		return err
 	}
-	if err := lockRow(ctx, tx, accountKey(userID, accountID), false); err != nil {
+	if err := lockRow(ctx, tx, accountTarget(userID, accountID), false); err != nil {
 		return err
 	}
 
-	if err := lockRow(ctx, tx, resourceKey(userID, accountID, firstResourceID), true); err != nil {
+	if err := lockRow(ctx, tx, resourceTarget(userID, accountID, firstResourceID), true); err != nil {
 		return err
 	}
 
@@ -101,7 +102,7 @@ func acquireTwoResourcesUnorderedWithBarrier(
 	<-startSecond
 
 	// This lock attempt should create a deadlock against the other transaction.
-	if err := lockRow(ctx, tx, resourceKey(userID, accountID, secondResourceID), true); err != nil {
+	if err := lockRow(ctx, tx, resourceTarget(userID, accountID, secondResourceID), true); err != nil {
 		return err
 	}
 

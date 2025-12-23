@@ -14,11 +14,7 @@ func TestHierarchy_ResourceBlocksAccountExclusive(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	setupLockTable(ctx, t, db)
-
-	// user1/accountA/resourceX
-	keys := append([]string{}, mustKeys(LevelResource, "user1", "accountA", "resourceX")...)
-	keys = append(keys, mustKeys(LevelAccount, "user1", "accountA", "")...)
-	seedLockKeys(ctx, t, db, keys...)
+	seedBuckets(ctx, t, db, mustTargets(LevelResource, "user1", "accountA", "resourceX")...)
 
 	m := NewManager(db)
 
@@ -65,9 +61,7 @@ func TestHierarchy_ResourceBlocksUserExclusive(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	setupLockTable(ctx, t, db)
-	keys := append([]string{}, mustKeys(LevelResource, "user1", "accountA", "resourceX")...)
-	keys = append(keys, mustKeys(LevelUser, "user1", "", "")...)
-	seedLockKeys(ctx, t, db, keys...)
+	seedBuckets(ctx, t, db, mustTargets(LevelResource, "user1", "accountA", "resourceX")...)
 
 	m := NewManager(db)
 
@@ -114,9 +108,13 @@ func TestHierarchy_DifferentResourcesDoNotConflict(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	setupLockTable(ctx, t, db)
-	keys := append([]string{}, mustKeys(LevelResource, "user1", "accountA", "resourceX")...)
-	keys = append(keys, mustKeys(LevelResource, "user1", "accountA", "resourceY")...)
-	seedLockKeys(ctx, t, db, keys...)
+	resourceY := pickDifferentResourceID("user1", "accountA", "resourceX")
+	seedBuckets(ctx, t, db,
+		mustTargets(LevelResource, "user1", "accountA", "resourceX")...,
+	)
+	seedBuckets(ctx, t, db,
+		mustTargets(LevelResource, "user1", "accountA", resourceY)...,
+	)
 
 	m := NewManager(db)
 
@@ -127,7 +125,7 @@ func TestHierarchy_DifferentResourcesDoNotConflict(t *testing.T) {
 	defer lock1.Release()
 
 	// Should succeed: user/account are shared-compatible, resource row differs.
-	lock2, err := m.Acquire(ctx, LevelResource, "user1", "accountA", "resourceY")
+	lock2, err := m.Acquire(ctx, LevelResource, "user1", "accountA", resourceY)
 	if err != nil {
 		t.Fatalf("acquire resourceY: %v", err)
 	}
@@ -141,9 +139,13 @@ func TestHierarchy_ConcurrentDifferentResources(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	setupLockTable(ctx, t, db)
-	keys := append([]string{}, mustKeys(LevelResource, "user1", "accountA", "resourceX")...)
-	keys = append(keys, mustKeys(LevelResource, "user1", "accountA", "resourceY")...)
-	seedLockKeys(ctx, t, db, keys...)
+	resourceY := pickDifferentResourceID("user1", "accountA", "resourceX")
+	seedBuckets(ctx, t, db,
+		mustTargets(LevelResource, "user1", "accountA", "resourceX")...,
+	)
+	seedBuckets(ctx, t, db,
+		mustTargets(LevelResource, "user1", "accountA", resourceY)...,
+	)
 
 	m := NewManager(db)
 
@@ -163,7 +165,7 @@ func TestHierarchy_ConcurrentDifferentResources(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		lock, err := m.Acquire(ctx, LevelResource, "user1", "accountA", "resourceY")
+		lock, err := m.Acquire(ctx, LevelResource, "user1", "accountA", resourceY)
 		if err != nil {
 			errCh <- err
 			return

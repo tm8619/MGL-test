@@ -4,8 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"hash/fnv"
 	"sort"
 )
+
+const lockBucketSpace = 10_000_000
 
 type Level int
 
@@ -109,10 +112,10 @@ func (m *Manager) AcquireResources(ctx context.Context, userID, accountID string
 	}
 
 	// Shared locks on ancestors.
-	if err := lockRow(ctx, tx, userKey(userID), false); err != nil {
+	if err := lockRow(ctx, tx, userTarget(userID), false); err != nil {
 		return rollback(err)
 	}
-	if err := lockRow(ctx, tx, accountKey(userID, accountID), false); err != nil {
+	if err := lockRow(ctx, tx, accountTarget(userID, accountID), false); err != nil {
 		return rollback(err)
 	}
 
@@ -120,7 +123,7 @@ func (m *Manager) AcquireResources(ctx context.Context, userID, accountID string
 	ordered := append([]string{}, resourceIDs...)
 	sort.Strings(ordered)
 	for _, r := range ordered {
-		if err := lockRow(ctx, tx, resourceKey(userID, accountID, r), true); err != nil {
+		if err := lockRow(ctx, tx, resourceTarget(userID, accountID, r), true); err != nil {
 			return rollback(err)
 		}
 	}
@@ -128,55 +131,67 @@ func (m *Manager) AcquireResources(ctx context.Context, userID, accountID string
 	return &LockHandle{tx: tx}, nil
 }
 
-func lockKeys(level Level, userID, accountID, resourceID string) ([]string, error) {
+type lockTarget struct {
+	level  Level
+	bucket int
+}
+
+func lockKeys(level Level, userID, accountID, resourceID string) ([]lockTarget, error) {
 	switch level {
 	case LevelUser:
 		if userID == "" {
 			return nil, fmt.Errorf("userID is required")
 		}
-		return []string{userKey(userID)}, nil
+		return []lockTarget{userTarget(userID)}, nil
 	case LevelAccount:
 		if userID == "" || accountID == "" {
 			return nil, fmt.Errorf("userID and accountID are required")
 		}
-		return []string{userKey(userID), accountKey(userID, accountID)}, nil
+		return []lockTarget{userTarget(userID), accountTarget(userID, accountID)}, nil
 	case LevelResource:
 		if userID == "" || accountID == "" || resourceID == "" {
 			return nil, fmt.Errorf("userID, accountID, and resourceID are required")
 		}
-		return []string{userKey(userID), accountKey(userID, accountID), resourceKey(userID, accountID, resourceID)}, nil
+		return []lockTarget{userTarget(userID), accountTarget(userID, accountID), resourceTarget(userID, accountID, resourceID)}, nil
 	default:
 		return nil, fmt.Errorf("unknown level")
 	}
 }
 
-func userKey(userID string) string {
-	return "user:" + userID
+func userTarget(userID string) lockTarget {
+	return lockTarget{level: LevelUser, bucket: bucket("user:", userID)}
 }
 
-func accountKey(userID, accountID string) string {
-	return "account:" + userID + ":" + accountID
+func accountTarget(userID, accountID string) lockTarget {
+	return lockTarget{level: LevelAccount, bucket: bucket("account:", userID+":"+accountID)}
 }
 
-func resourceKey(userID, accountID, resourceID string) string {
-	return "resource:" + userID + ":" + accountID + ":" + resourceID
+func resourceTarget(userID, accountID, resourceID string) lockTarget {
+	return lockTarget{level: LevelResource, bucket: bucket("resource:", userID+":"+accountID+":"+resourceID)}
 }
 
-func lockRow(ctx context.Context, tx *sql.Tx, lockKey string, exclusive bool) error {
+func bucket(prefix, s string) int {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(prefix))
+	_, _ = h.Write([]byte(s))
+	return int(h.Sum32() % lockBucketSpace)
+}
+
+func lockRow(ctx context.Context, tx *sql.Tx, target lockTarget, exclusive bool) error {
 	// NOTE:
 	// - We intentionally DO NOT use NOWAIT here: callers/tests can observe real
 	//   blocking behavior.
-	// - The row must exist (we pre-create rows in tests).
+	// - The row must exist (bucket rows are expected to be pre-provisioned).
 	var query string
 	if exclusive {
-		query = "SELECT lock_key FROM hier_locks WHERE lock_key = ? FOR UPDATE"
+		query = "SELECT bucket FROM hier_lock_buckets WHERE level = ? AND bucket = ? FOR UPDATE"
 	} else {
-		query = "SELECT lock_key FROM hier_locks WHERE lock_key = ? FOR SHARE"
+		query = "SELECT bucket FROM hier_lock_buckets WHERE level = ? AND bucket = ? FOR SHARE"
 	}
 
-	var got string
-	if err := tx.QueryRowContext(ctx, query, lockKey).Scan(&got); err != nil {
-		return fmt.Errorf("lock %q (exclusive=%v): %w", lockKey, exclusive, err)
+	var got int
+	if err := tx.QueryRowContext(ctx, query, int(target.level), target.bucket).Scan(&got); err != nil {
+		return fmt.Errorf("lock level=%d bucket=%d (exclusive=%v): %w", target.level, target.bucket, exclusive, err)
 	}
 	return nil
 }

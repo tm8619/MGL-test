@@ -68,6 +68,7 @@ MySQL に接続できない環境では、`hierlock` のテストは `SKIP` に�
 シナリオごとの期待挙動は以下にまとめています:
 
 - docs/hierlock-scenarios.md
+- docs/hierlock-design.md
 
 ## 検証シナリオ
 

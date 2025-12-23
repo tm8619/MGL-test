@@ -16,9 +16,55 @@ func TestHierarchy_ExhaustiveGeneratedMatrix(t *testing.T) {
 
 	m := NewManager(db)
 
-	users := []string{"u1", "u2"}
-	accounts := []string{"a1", "a2"}
-	resources := []string{"r1", "r2"}
+	u1 := "u1"
+	a1 := "a1"
+	r1 := "r1"
+
+	// Pick IDs that avoid bucket collisions so that the matrix expectations remain
+	// deterministic even under lock striping.
+	u2 := pickDifferentUserIDNonColliding(u1, a1, r1)
+
+	a2 := func() string {
+		base := "a2"
+		for i := 0; ; i++ {
+			cand := base
+			if i > 0 {
+				cand = fmt.Sprintf("%s_%d", base, i)
+			}
+			need := map[lockTarget]struct{}{}
+			for _, u := range []string{u1, u2} {
+				need[accountTarget(u, a1)] = struct{}{}
+				need[accountTarget(u, cand)] = struct{}{}
+			}
+			if len(need) == 4 {
+				return cand
+			}
+		}
+	}()
+
+	r2 := func() string {
+		base := "r2"
+		for i := 0; ; i++ {
+			cand := base
+			if i > 0 {
+				cand = fmt.Sprintf("%s_%d", base, i)
+			}
+			need := map[lockTarget]struct{}{}
+			for _, u := range []string{u1, u2} {
+				for _, a := range []string{a1, a2} {
+					need[resourceTarget(u, a, r1)] = struct{}{}
+					need[resourceTarget(u, a, cand)] = struct{}{}
+				}
+			}
+			if len(need) == 8 {
+				return cand
+			}
+		}
+	}()
+
+	users := []string{u1, u2}
+	accounts := []string{a1, a2}
+	resources := []string{r1, r2}
 
 	specs := make([]acquireSpec, 0, len(users)+len(users)*len(accounts)+len(users)*len(accounts)*len(resources))
 	for _, u := range users {
@@ -41,18 +87,18 @@ func TestHierarchy_ExhaustiveGeneratedMatrix(t *testing.T) {
 	defer cancel()
 	setupLockTable(ctx, t, db)
 
-	// Seed all required keys once.
-	allKeys := map[string]struct{}{}
+	// Pre-provision bucket rows required by all specs.
+	need := map[lockTarget]struct{}{}
 	for _, s := range specs {
-		for _, k := range mustKeys(s.level, s.userID, s.accountID, s.resourceID) {
-			allKeys[k] = struct{}{}
+		for _, tgt := range mustTargets(s.level, s.userID, s.accountID, s.resourceID) {
+			need[tgt] = struct{}{}
 		}
 	}
-	keys := make([]string, 0, len(allKeys))
-	for k := range allKeys {
-		keys = append(keys, k)
+	flat := make([]lockTarget, 0, len(need))
+	for tgt := range need {
+		flat = append(flat, tgt)
 	}
-	seedLockKeys(ctx, t, db, keys...)
+	seedBuckets(ctx, t, db, flat...)
 
 	for _, first := range specs {
 		for _, second := range specs {

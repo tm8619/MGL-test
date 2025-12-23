@@ -2,7 +2,6 @@ package hierlock
 
 import (
 	"context"
-	"database/sql"
 	"testing"
 	"time"
 )
@@ -20,6 +19,13 @@ func TestHierarchy_CompatibilityMatrix(t *testing.T) {
 
 	m := NewManager(db)
 
+	u1 := "u1"
+	a1 := "a1"
+	r1 := "r1"
+	r2 := pickDifferentResourceID(u1, a1, r1)
+	a2 := pickDifferentAccountIDNonCollidingResource(u1, a1, r1)
+	u2 := pickDifferentUserIDNonColliding(u1, a1, r1)
+
 	cases := []struct {
 		name         string
 		first        acquireSpec
@@ -28,74 +34,74 @@ func TestHierarchy_CompatibilityMatrix(t *testing.T) {
 	}{
 		{
 			name: "resource blocks same resource",
-			first: acquireSpec{level: LevelResource, userID: "u1", accountID: "a1", resourceID: "r1"},
-			second: acquireSpec{level: LevelResource, userID: "u1", accountID: "a1", resourceID: "r1"},
+			first: acquireSpec{level: LevelResource, userID: u1, accountID: a1, resourceID: r1},
+			second: acquireSpec{level: LevelResource, userID: u1, accountID: a1, resourceID: r1},
 			wantBlock: true,
 		},
 		{
 			name: "resource allows different resource same account",
-			first: acquireSpec{level: LevelResource, userID: "u1", accountID: "a1", resourceID: "r1"},
-			second: acquireSpec{level: LevelResource, userID: "u1", accountID: "a1", resourceID: "r2"},
+			first: acquireSpec{level: LevelResource, userID: u1, accountID: a1, resourceID: r1},
+			second: acquireSpec{level: LevelResource, userID: u1, accountID: a1, resourceID: r2},
 			wantBlock: false,
 		},
 		{
 			name: "resource allows different account same user",
-			first: acquireSpec{level: LevelResource, userID: "u1", accountID: "a1", resourceID: "r1"},
-			second: acquireSpec{level: LevelResource, userID: "u1", accountID: "a2", resourceID: "r1"},
+			first: acquireSpec{level: LevelResource, userID: u1, accountID: a1, resourceID: r1},
+			second: acquireSpec{level: LevelResource, userID: u1, accountID: a2, resourceID: r1},
 			wantBlock: false,
 		},
 		{
 			name: "resource allows different user",
-			first: acquireSpec{level: LevelResource, userID: "u1", accountID: "a1", resourceID: "r1"},
-			second: acquireSpec{level: LevelResource, userID: "u2", accountID: "a1", resourceID: "r1"},
+			first: acquireSpec{level: LevelResource, userID: u1, accountID: a1, resourceID: r1},
+			second: acquireSpec{level: LevelResource, userID: u2, accountID: a1, resourceID: r1},
 			wantBlock: false,
 		},
 		{
 			name: "account blocks resource under same account",
-			first: acquireSpec{level: LevelAccount, userID: "u1", accountID: "a1"},
-			second: acquireSpec{level: LevelResource, userID: "u1", accountID: "a1", resourceID: "r1"},
+			first: acquireSpec{level: LevelAccount, userID: u1, accountID: a1},
+			second: acquireSpec{level: LevelResource, userID: u1, accountID: a1, resourceID: r1},
 			wantBlock: true,
 		},
 		{
 			name: "resource blocks account on same account",
-			first: acquireSpec{level: LevelResource, userID: "u1", accountID: "a1", resourceID: "r1"},
-			second: acquireSpec{level: LevelAccount, userID: "u1", accountID: "a1"},
+			first: acquireSpec{level: LevelResource, userID: u1, accountID: a1, resourceID: r1},
+			second: acquireSpec{level: LevelAccount, userID: u1, accountID: a1},
 			wantBlock: true,
 		},
 		{
 			name: "account blocks same account",
-			first: acquireSpec{level: LevelAccount, userID: "u1", accountID: "a1"},
-			second: acquireSpec{level: LevelAccount, userID: "u1", accountID: "a1"},
+			first: acquireSpec{level: LevelAccount, userID: u1, accountID: a1},
+			second: acquireSpec{level: LevelAccount, userID: u1, accountID: a1},
 			wantBlock: true,
 		},
 		{
 			name: "account allows different account under same user",
-			first: acquireSpec{level: LevelAccount, userID: "u1", accountID: "a1"},
-			second: acquireSpec{level: LevelAccount, userID: "u1", accountID: "a2"},
+			first: acquireSpec{level: LevelAccount, userID: u1, accountID: a1},
+			second: acquireSpec{level: LevelAccount, userID: u1, accountID: a2},
 			wantBlock: false,
 		},
 		{
 			name: "user blocks account under same user",
-			first: acquireSpec{level: LevelUser, userID: "u1"},
-			second: acquireSpec{level: LevelAccount, userID: "u1", accountID: "a1"},
+			first: acquireSpec{level: LevelUser, userID: u1},
+			second: acquireSpec{level: LevelAccount, userID: u1, accountID: a1},
 			wantBlock: true,
 		},
 		{
 			name: "account blocks user (reverse order)",
-			first: acquireSpec{level: LevelAccount, userID: "u1", accountID: "a1"},
-			second: acquireSpec{level: LevelUser, userID: "u1"},
+			first: acquireSpec{level: LevelAccount, userID: u1, accountID: a1},
+			second: acquireSpec{level: LevelUser, userID: u1},
 			wantBlock: true,
 		},
 		{
 			name: "user blocks resource under same user",
-			first: acquireSpec{level: LevelUser, userID: "u1"},
-			second: acquireSpec{level: LevelResource, userID: "u1", accountID: "a1", resourceID: "r1"},
+			first: acquireSpec{level: LevelUser, userID: u1},
+			second: acquireSpec{level: LevelResource, userID: u1, accountID: a1, resourceID: r1},
 			wantBlock: true,
 		},
 		{
 			name: "user allows different user",
-			first: acquireSpec{level: LevelUser, userID: "u1"},
-			second: acquireSpec{level: LevelUser, userID: "u2"},
+			first: acquireSpec{level: LevelUser, userID: u1},
+			second: acquireSpec{level: LevelUser, userID: u2},
 			wantBlock: false,
 		},
 	}
@@ -107,7 +113,19 @@ func TestHierarchy_CompatibilityMatrix(t *testing.T) {
 			defer cancel()
 
 			setupLockTable(ctx, t, db)
-			seedForTwoAcquires(ctx, t, db, tc.first, tc.second)
+			// Pre-provision bucket rows required by both acquisitions.
+			need := map[lockTarget]struct{}{}
+			for _, spec := range []acquireSpec{tc.first, tc.second} {
+				tgts := mustTargets(spec.level, spec.userID, spec.accountID, spec.resourceID)
+				for _, tgt := range tgts {
+					need[tgt] = struct{}{}
+				}
+			}
+			flat := make([]lockTarget, 0, len(need))
+			for tgt := range need {
+				flat = append(flat, tgt)
+			}
+			seedBuckets(ctx, t, db, flat...)
 
 			first, err := m.Acquire(ctx, tc.first.level, tc.first.userID, tc.first.accountID, tc.first.resourceID)
 			if err != nil {
@@ -162,21 +180,6 @@ func TestHierarchy_CompatibilityMatrix(t *testing.T) {
 	}
 }
 
-func seedForTwoAcquires(ctx context.Context, t fataler, db *sql.DB, a, b acquireSpec) {
-	keys := map[string]struct{}{}
-	for _, spec := range []acquireSpec{a, b} {
-		for _, k := range mustKeys(spec.level, spec.userID, spec.accountID, spec.resourceID) {
-			keys[k] = struct{}{}
-		}
-	}
-
-	all := make([]string, 0, len(keys))
-	for k := range keys {
-		all = append(all, k)
-	}
-	seedLockKeys(ctx, t, db, all...)
-}
-
 func TestHierarchy_NoDeadlock_MultiResourceOrdered(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
@@ -184,12 +187,11 @@ func TestHierarchy_NoDeadlock_MultiResourceOrdered(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	setupLockTable(ctx, t, db)
-
-	seedLockKeys(ctx, t, db,
-		userKey("u1"),
-		accountKey("u1", "a1"),
-		resourceKey("u1", "a1", "r1"),
-		resourceKey("u1", "a1", "r2"),
+	seedBuckets(ctx, t, db,
+		userTarget("u1"),
+		accountTarget("u1", "a1"),
+		resourceTarget("u1", "a1", "r1"),
+		resourceTarget("u1", "a1", "r2"),
 	)
 
 	m := NewManager(db)
